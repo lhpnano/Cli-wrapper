@@ -10,14 +10,15 @@ before launch so stale ProxyEnable=1 cannot route a direct/VPN call to a dead
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('Auto', 'V2rayN', 'Surfshark', 'Direct')]
+  [ValidateSet('Auto', 'V2rayN', 'Clash', 'Surfshark', 'Direct')]
   [string]$Network = 'Auto',
-  [string]$V2rayEndpoint = 'http://127.0.0.1:10808'
+  [string]$V2rayEndpoint = 'http://127.0.0.1:10808',
+  [string]$ClashEndpoint = 'http://127.0.0.1:10809'
 )
 
 $ErrorActionPreference = 'Stop'
 $resolver = Join-Path $PSScriptRoot 'agy-mode.ps1'
-$resolved = @(& $resolver -Network $Network -V2rayEndpoint $V2rayEndpoint 2>$null)
+$resolved = @(& $resolver -Network $Network -V2rayEndpoint $V2rayEndpoint -ClashEndpoint $ClashEndpoint 2>$null)
 $route = if ($resolved.Count -gt 0) { ([string]$resolved[-1]).Trim() } else { '' }
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($route)) {
   Write-Error 'network resolver returned no route'

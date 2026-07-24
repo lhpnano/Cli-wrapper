@@ -7,10 +7,11 @@
 # that no layer re-parses the prompt -- routing agy's own flags through PowerShell
 # parameter binding mangles both -p and --long-flags.
 param(
-  [ValidateSet('Auto', 'V2rayN', 'Surfshark', 'Direct')]
+  [ValidateSet('Auto', 'V2rayN', 'Clash', 'Surfshark', 'Direct')]
   [string]$Network = 'Auto',
 
-  [string]$V2rayEndpoint = 'http://127.0.0.1:10808'
+  [string]$V2rayEndpoint = 'http://127.0.0.1:10808',
+  [string]$ClashEndpoint = 'http://127.0.0.1:10809'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +25,17 @@ function Test-ProxyListening {
     $client.Close()
     return $listening
   } catch { return $false }
+}
+
+function Get-DashboardNetworkConfig {
+  $configPath = Join-Path $env:LOCALAPPDATA 'AI-Network-Panel\config.json'
+  if (-not (Test-Path -LiteralPath $configPath)) { return $null }
+  try {
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    if ($config.providers.V2rayN.endpoint) { $script:V2rayEndpoint = [string]$config.providers.V2rayN.endpoint }
+    if ($config.providers.Clash.endpoint) { $script:ClashEndpoint = [string]$config.providers.Clash.endpoint }
+    return [string]$config.activeProvider
+  } catch { return $null }
 }
 
 # The Surfshark service runs whether or not the tunnel is up, so the process list proves
@@ -65,14 +77,29 @@ function Test-VpnRouteUp {
 
 $mode = $Network
 if ($mode -eq 'Auto') {
-  # Surfshark wins a tie: network-layer routing also covers traffic that ignores proxy
-  # variables.
-  $mode = if (Test-VpnRouteUp) { 'Surfshark' }
-          elseif (Test-ProxyListening -Url $V2rayEndpoint) { 'V2rayN' }
-          else { 'Direct' }
+  $configured = Get-DashboardNetworkConfig
+  if ($configured -eq 'Clash' -and (Test-ProxyListening -Url $ClashEndpoint)) { $mode = 'Clash' }
+  elseif ($configured -eq 'V2rayN' -and (Test-ProxyListening -Url $V2rayEndpoint)) { $mode = 'V2rayN' }
+  elseif ($configured -eq 'Surfshark' -and (Test-VpnRouteUp)) { $mode = 'Surfshark' }
+  elseif ($configured -eq 'Direct') { $mode = 'Direct' }
+  else {
+    # Prefer local explicit proxy providers before VPN fallback. This keeps CLI calls
+    # deterministic when Clash/V2rayN are intentionally running alongside Surfshark.
+    $mode = if (Test-ProxyListening -Url $ClashEndpoint) { 'Clash' }
+            elseif (Test-ProxyListening -Url $V2rayEndpoint) { 'V2rayN' }
+            elseif (Test-VpnRouteUp) { 'Surfshark' }
+            else { 'Direct' }
+  }
 }
 
 switch ($mode) {
+  'Clash' {
+    if (-not (Test-ProxyListening -Url $ClashEndpoint)) {
+      Write-Output "ERROR:Clash requested but nothing is listening on $ClashEndpoint"
+      exit 9
+    }
+    Write-Output $ClashEndpoint
+  }
   'V2rayN' {
     if (-not (Test-ProxyListening -Url $V2rayEndpoint)) {
       Write-Output "ERROR:V2rayN requested but nothing is listening on $V2rayEndpoint"

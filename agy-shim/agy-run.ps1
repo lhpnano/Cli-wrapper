@@ -133,7 +133,7 @@ param(
 
   [string]$Proxy = 'http://127.0.0.1:10808',
 
-  [ValidateSet('Auto', 'V2rayN', 'Surfshark', 'Direct')]
+  [ValidateSet('Auto', 'V2rayN', 'Clash', 'Surfshark', 'Direct')]
   [string]$Network = 'Auto',
 
   [switch]$Direct,
@@ -634,32 +634,38 @@ function Test-NetworkPath {
 }
 
 $networkMode = if ($Direct) { 'Direct' } else { $Network }
-if ($networkMode -eq 'Auto') {
-  # Surfshark wins a tie: it routes at the network layer, so it also covers any traffic
-  # that ignores proxy variables.
-  $networkMode = if (Test-VpnRouteUp) { 'Surfshark' }
-                 elseif (Test-ProxyListening -Url $Proxy) { 'V2rayN' }
-                 else { 'Direct' }
+$routeResolver = Join-Path $PSScriptRoot 'agy-mode.ps1'
+if (-not (Test-Path -LiteralPath $routeResolver -PathType Leaf)) {
+  Exit-AgyRun -Code 9 -Message "network resolver missing: $routeResolver"
+}
+$resolvedRoute = @(& $routeResolver -Network $networkMode -V2rayEndpoint $Proxy 2>$null)
+$route = if ($resolvedRoute.Count -gt 0) { ([string]$resolvedRoute[-1]).Trim() } else { '' }
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($route)) {
+  Exit-AgyRun -Code 9 -Message "network resolver returned no route for $networkMode"
+}
+if ($route -like 'ERROR:*') {
+  Exit-AgyRun -Code 9 -Message $route.Substring(6)
 }
 
-if ($networkMode -eq 'V2rayN') {
-  if (-not (Test-ProxyListening -Url $Proxy)) {
-    Exit-AgyRun -Code 9 -Message "network mode V2rayN was requested but nothing is listening on $Proxy"
-  }
-  $env:HTTP_PROXY = $Proxy
-  $env:HTTPS_PROXY = $Proxy
-} elseif ($networkMode -eq 'Surfshark' -and -not (Test-VpnRouteUp)) {
-  # Silently degrading to Direct here would send traffic out of the local ISP under a
-  # name that promises a tunnel, and the region rejection that follows looks like an agy bug.
-  Exit-AgyRun -Code 9 -Message 'network mode Surfshark was requested but no VPN adapter owns a default route'
-} else {
-  # Surfshark and Direct both mean: no proxy variables, let the routing table decide.
+if ($route -eq 'DIRECT') {
   $env:HTTP_PROXY = $null
   $env:HTTPS_PROXY = $null
   $env:ALL_PROXY = $null
+} else {
+  $env:HTTP_PROXY = $route
+  $env:HTTPS_PROXY = $route
+  $env:ALL_PROXY = $null
 }
 $env:NO_PROXY = '127.0.0.1,localhost'
-Write-AgyDiagnostic "network: $networkMode$(if ($networkMode -eq 'V2rayN') { " via $Proxy" })"
+if ($networkMode -eq 'Auto') {
+  try {
+    $uri = [System.Uri]::new($route)
+    $networkMode = if ($uri.Port -eq 10809) { 'Clash' } elseif ($uri.Port -eq 10808) { 'V2rayN' } else { "Proxy:$($uri.Port)" }
+  } catch {
+    $networkMode = 'Direct'
+  }
+}
+Write-AgyDiagnostic "network: $networkMode$(if ($route -ne 'DIRECT') { " via $route" })"
 
 if (-not $NoNetworkCheck) {
   if (-not (Test-NetworkPath)) {

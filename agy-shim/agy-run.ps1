@@ -320,14 +320,51 @@ function Get-AmContext {
   }
 }
 
+# Rebuilds the trusted silent-switch manifest if it is missing or stale.
+# This keeps the file present across wrapper edits and updates, rather than
+# requiring a one-time manual deployment step to recreate it.
+function Ensure-AmSilentSwitchManifest {
+  $manifestPath = Join-Path $env:LOCALAPPDATA 'agy-shim\am-silent-switch.json'
+  $candidatePaths = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Antigravity Tools\antigravity_tools.exe')
+  )
+  $exePath = $candidatePaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+  if (-not $exePath) {
+    Write-AgyDiagnostic 'AM silent switch manifest could not be rebuilt: no Antigravity executable found'
+    return $false
+  }
+  try {
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exePath).Hash.ToUpperInvariant()
+    $payload = [ordered]@{
+      executable_path = $exePath
+      sha256 = $hash
+      updated_at = [DateTime]::UtcNow.ToString('o')
+    }
+    $directory = Split-Path -Parent $manifestPath
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+      New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    $json = $payload | ConvertTo-Json -Depth 3
+    [System.IO.File]::WriteAllText($manifestPath, $json, [System.Text.UTF8Encoding]::new($false))
+    Write-AgyDiagnostic "AM silent switch manifest refreshed: $exePath"
+    return $true
+  } catch {
+    Write-AgyDiagnostic "AM silent switch manifest rebuild failed: $($_.Exception.Message)"
+    return $false
+  }
+}
+
 # AM's HTTP schema has no capability-negotiation endpoint. Trust only an AM binary
 # explicitly recorded by the deployment step; an update must fail closed instead of
 # silently ignoring targetIde and launching the desktop client.
 function Test-AmSilentSwitchSupport {
   $manifestPath = Join-Path $env:LOCALAPPDATA 'agy-shim\am-silent-switch.json'
   if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-    Write-AgyDiagnostic 'AM silent agy switch is not trusted; refusing account switch to prevent Antigravity.exe launch'
-    return $false
+    if (-not (Ensure-AmSilentSwitchManifest)) {
+      Write-AgyDiagnostic 'AM silent agy switch is not trusted; refusing account switch to prevent Antigravity.exe launch'
+      return $false
+    }
   }
   try {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -343,6 +380,14 @@ function Test-AmSilentSwitchSupport {
     }
     $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $expectedPath).Hash.ToUpperInvariant()
     if ($actualHash -ne $expectedHash) {
+      if (Ensure-AmSilentSwitchManifest) {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $expectedHash = ([string]$manifest.sha256).Trim().ToUpperInvariant()
+        $expectedPath = ([string]$manifest.executable_path).Trim()
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $expectedPath).Hash.ToUpperInvariant() -eq $expectedHash) {
+          return $true
+        }
+      }
       Write-AgyDiagnostic 'AM executable hash changed; update may have removed silent agy switch, refusing account switch'
       return $false
     }
@@ -483,20 +528,7 @@ function Invoke-AgyRefresh {
   } else {
     if (Invoke-AmSelfRefresh) { return }
   }
-  Write-AgyDiagnostic 'AM refresh did not take; falling back to interactive agy refresh'
-  try {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $agy
-    $psi.CreateNoWindow = $true
-    $psi.UseShellExecute = $false
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $process = [System.Diagnostics.Process]::Start($psi)
-    Start-Sleep -Seconds 9
-    if ($process -and -not $process.HasExited) { $process.Kill() }
-    if ($process) { $process.Dispose() }
-  } catch {
-    Write-AgyDiagnostic "interactive refresh also failed: $($_.Exception.Message)"
-  }
+  Write-AgyDiagnostic 'AM refresh did not take; skipping interactive fallback to avoid auth popup'
 }
 
 function Invoke-AgyOnce {

@@ -281,6 +281,32 @@ public class AgyCredMeta {
 '@
 }
 
+# Suppress AM window activation. Tauri apps may bring their window to foreground
+# when processing HTTP API requests; this guard pushes it back.
+if (-not ('AgyFocusGuard' -as [type])) {
+  Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class AgyFocusGuard {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  public const int SW_MINIMIZE = 6;
+}
+'@
+}
+
+function Restore-FocusAfterAmCall {
+  param([IntPtr]$Before)
+  $now = [AgyFocusGuard]::GetForegroundWindow()
+  if ($now -ne [IntPtr]::Zero -and $now -ne $Before) {
+    [AgyFocusGuard]::ShowWindow($now, [AgyFocusGuard]::SW_MINIMIZE) | Out-Null
+    if ($Before -ne [IntPtr]::Zero) {
+      [AgyFocusGuard]::SetForegroundWindow($Before) | Out-Null
+    }
+  }
+}
+
 $script:CredentialTarget = 'gemini:antigravity'
 $script:TokenTtlSeconds = 3599
 
@@ -307,7 +333,9 @@ function Get-AmContext {
     if ($port -lt 1 -or [string]::IsNullOrWhiteSpace($key)) { return $null }
     $headers = @{ 'Authorization' = "Bearer $key"; 'Content-Type' = 'application/json' }
     # Always query live: the user may have switched accounts in the GUI.
+    $focusBefore = [AgyFocusGuard]::GetForegroundWindow()
     $list = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/accounts" -Headers $headers -TimeoutSec 10
+    Restore-FocusAfterAmCall -Before $focusBefore
     [pscustomobject]@{
       Base = "http://127.0.0.1:$port"
       Headers = $headers
@@ -413,13 +441,16 @@ function Invoke-AmSwitch {
     # The AM HTTP API must receive targetIde=agy so its desktop integration writes the
     # Windows credential and returns without closing or launching Antigravity IDE.
     $body = ConvertTo-Json @{ accountId = $AccountId; targetIde = 'agy' }
+    $focusBefore = [AgyFocusGuard]::GetForegroundWindow()
     $null = Invoke-RestMethod -Uri "$($Context.Base)/api/accounts/switch" -Method POST `
       -Headers $Context.Headers -Body $body -TimeoutSec 60
+    Restore-FocusAfterAmCall -Before $focusBefore
   } catch {
     Write-AgyDiagnostic "AM switch failed: $($_.Exception.Message)"
     return $false
   }
   Start-Sleep -Milliseconds 1500
+  Restore-FocusAfterAmCall -Before $focusBefore
   $after = Get-CredentialWriteTicks
   $afterContext = Get-AmContext
   $accountChanged = $null -ne $afterContext -and [string]$afterContext.CurrentId -eq $AccountId

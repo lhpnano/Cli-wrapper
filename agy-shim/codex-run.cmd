@@ -1,2 +1,2 @@
 @echo off
-powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\codex-run.ps1" %*
+call "%LOCALAPPDATA%\agy-shim\pwsh-auto.cmd" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\codex-run.ps1" %*

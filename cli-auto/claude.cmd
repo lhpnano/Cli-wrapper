@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "AI_ROUTE="
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\cli-network-sync.ps1" -Network Auto`) do set "AI_ROUTE=%%i"
+for /f "usebackq delims=" %%i in (`call %LOCALAPPDATA%\agy-shim\pwsh-auto.cmd -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\cli-network-sync.ps1" -Network Auto`) do set "AI_ROUTE=%%i"
 if "%AI_ROUTE%"=="" goto :route_error
 echo %AI_ROUTE% | findstr /b /c:"ERROR:" >nul
 if not errorlevel 1 goto :route_error

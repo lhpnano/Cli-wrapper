@@ -1,0 +1,15 @@
+# AI backup safety
+.env
+.env.*
+*.key
+*.token
+*.pem
+*.p12
+*.pfx
+auth.json
+credentials*.json
+settings.local.json
+*.bak
+*.bak-*
+credentials.local.json
+credentials.local.json.*

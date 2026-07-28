@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "AGYMODE="
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\agy-mode.ps1" -Network Direct`) do set "AGYMODE=%%i"
+for /f "usebackq delims=" %%i in (`call "%LOCALAPPDATA%\agy-shim\pwsh-auto.cmd" -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\agy-mode.ps1" -Network Direct`) do set "AGYMODE=%%i"
 if "%AGYMODE%"=="" goto :agyerr
 echo %AGYMODE% | findstr /b /c:"ERROR:" >nul
 if not errorlevel 1 goto :agyerr

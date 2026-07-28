@@ -117,7 +117,11 @@ function Invoke-WorkerProcess {
     [string]$StderrPath,
     [string]$BatchId
   )
-  $powershellExe = Join-Path $PSHOME 'powershell.exe'
+  $powershellExe = if ($PSVersionTable.PSEdition -eq 'Core') {
+    Join-Path $PSHOME 'pwsh.exe'
+  } else {
+    Join-Path $PSHOME 'powershell.exe'
+  }
   $processInfo = New-Object System.Diagnostics.ProcessStartInfo
   $processInfo.FileName = $powershellExe
   $processInfo.Arguments = $ArgumentLine

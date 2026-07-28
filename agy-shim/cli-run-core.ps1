@@ -122,8 +122,13 @@ function Resolve-CliCommandSpec {
 
   $extension = [System.IO.Path]::GetExtension($resolvedPath).ToLowerInvariant()
   if ($extension -eq '.ps1') {
+    $powershellExe = if ($PSVersionTable.PSEdition -eq 'Core') {
+      Join-Path $PSHOME 'pwsh.exe'
+    } else {
+      Join-Path $PSHOME 'powershell.exe'
+    }
     return [pscustomobject]@{
-      FilePath = (Join-Path $PSHOME 'powershell.exe')
+      FilePath = $powershellExe
       PrefixArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $resolvedPath)
       ResolvedCliPath = $resolvedPath
     }

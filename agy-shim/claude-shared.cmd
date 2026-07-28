@@ -1,2 +1,2 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\claude-shared.ps1" %*
+call "%LOCALAPPDATA%\agy-shim\pwsh-auto.cmd" -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\agy-shim\claude-shared.ps1" %*

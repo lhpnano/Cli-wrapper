@@ -281,8 +281,9 @@ public class AgyCredMeta {
 '@
 }
 
-# Suppress AM window activation. Tauri apps may bring their window to foreground
-# when processing HTTP API requests; this guard pushes it back.
+# Suppress AM side effects: AM may launch Antigravity IDE and/or bring windows
+# to foreground when processing HTTP API requests. This guard kills unwanted IDE
+# processes and restores the original foreground window.
 if (-not ('AgyFocusGuard' -as [type])) {
   Add-Type -Language CSharp -TypeDefinition @'
 using System;
@@ -296,13 +297,28 @@ public class AgyFocusGuard {
 '@
 }
 
-function Restore-FocusAfterAmCall {
-  param([IntPtr]$Before)
+function Save-AmCallState {
+  @{
+    FocusBefore = [AgyFocusGuard]::GetForegroundWindow()
+    IdePids = @(Get-Process -Name 'Antigravity' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  }
+}
+
+function Restore-AmCallState {
+  param($State)
+  # Kill IDE processes that AM spawned as a side effect
+  $newIdes = @(Get-Process -Name 'Antigravity' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Id -notin $State.IdePids })
+  foreach ($p in $newIdes) {
+    try { $p.Kill(); $p.WaitForExit(3000) } catch {}
+    Write-AgyDiagnostic "killed AM-spawned Antigravity IDE (PID $($p.Id))"
+  }
+  # Restore foreground window
   $now = [AgyFocusGuard]::GetForegroundWindow()
-  if ($now -ne [IntPtr]::Zero -and $now -ne $Before) {
+  if ($now -ne [IntPtr]::Zero -and $now -ne $State.FocusBefore) {
     [AgyFocusGuard]::ShowWindow($now, [AgyFocusGuard]::SW_MINIMIZE) | Out-Null
-    if ($Before -ne [IntPtr]::Zero) {
-      [AgyFocusGuard]::SetForegroundWindow($Before) | Out-Null
+    if ($State.FocusBefore -ne [IntPtr]::Zero) {
+      [AgyFocusGuard]::SetForegroundWindow($State.FocusBefore) | Out-Null
     }
   }
 }
@@ -333,9 +349,9 @@ function Get-AmContext {
     if ($port -lt 1 -or [string]::IsNullOrWhiteSpace($key)) { return $null }
     $headers = @{ 'Authorization' = "Bearer $key"; 'Content-Type' = 'application/json' }
     # Always query live: the user may have switched accounts in the GUI.
-    $focusBefore = [AgyFocusGuard]::GetForegroundWindow()
+    $amState = Save-AmCallState
     $list = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/accounts" -Headers $headers -TimeoutSec 10
-    Restore-FocusAfterAmCall -Before $focusBefore
+    Restore-AmCallState -State $amState
     [pscustomobject]@{
       Base = "http://127.0.0.1:$port"
       Headers = $headers
@@ -441,16 +457,16 @@ function Invoke-AmSwitch {
     # The AM HTTP API must receive targetIde=agy so its desktop integration writes the
     # Windows credential and returns without closing or launching Antigravity IDE.
     $body = ConvertTo-Json @{ accountId = $AccountId; targetIde = 'agy' }
-    $focusBefore = [AgyFocusGuard]::GetForegroundWindow()
+    $amState = Save-AmCallState
     $null = Invoke-RestMethod -Uri "$($Context.Base)/api/accounts/switch" -Method POST `
       -Headers $Context.Headers -Body $body -TimeoutSec 60
-    Restore-FocusAfterAmCall -Before $focusBefore
+    Restore-AmCallState -State $amState
   } catch {
     Write-AgyDiagnostic "AM switch failed: $($_.Exception.Message)"
     return $false
   }
   Start-Sleep -Milliseconds 1500
-  Restore-FocusAfterAmCall -Before $focusBefore
+  Restore-AmCallState -State $amState
   $after = Get-CredentialWriteTicks
   $afterContext = Get-AmContext
   $accountChanged = $null -ne $afterContext -and [string]$afterContext.CurrentId -eq $AccountId

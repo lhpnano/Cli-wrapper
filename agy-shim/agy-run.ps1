@@ -960,7 +960,34 @@ while ($true) {
   if (-not [string]::IsNullOrWhiteSpace($result.Stderr)) {
     [Console]::Error.WriteLine($result.Stderr.TrimEnd())
   }
-  Write-AgyDiagnostic "completed attempt $attempt in $($result.ElapsedSeconds)s; stdout-chars=$($trimmedOutput.Length)"
+
+  # Truncation looks exactly like success. agy carries a per-CONVERSATION context budget
+  # (CheckpointConfig: token_threshold / max_token_limit / checkpoint_model) that compacts or
+  # cuts off the tool loop when one run's context grows too large; it then injects "Task is
+  # complete. Summarize what you did and do not call any more tools." and exits 0 with a tidy
+  # summary of an investigation that never finished. Nothing else here notices, because the
+  # failure classifier only runs on the failure path.
+  #
+  # This is NOT the account quota — quota is per-account, resets hourly, and is already
+  # handled by the auto-switch path via $logQuotaPattern. These strings deliberately do not
+  # overlap it, so this can never trigger a pointless account switch. Feeding the run less to
+  # read is the only lever; there is no CLI flag for it (`agy --help` has no token knob).
+  #
+  # Detection only. As of 2026-08-04 no transcript on this machine shows it firing, so treat
+  # a hit as a lead to investigate, not as a proven diagnosis.
+  $budgetHit = $false
+  if (Test-Path -LiteralPath $script:DiagnosticLog) {
+    try {
+      $budgetHit = @(Select-String -LiteralPath $script:DiagnosticLog -Encoding utf8 -SimpleMatch `
+        -Pattern 'agent max token limit', 'exceeded token limit of', 'do not call any more tools' `
+        -List -ErrorAction Stop).Count -gt 0
+    } catch { $budgetHit = $false }
+  }
+  if ($budgetHit) {
+    [Console]::Error.WriteLine('[agy-run] WARNING: this run hit agy''s per-conversation CONTEXT limit and was forced to wrap up early. The answer below summarises an UNFINISHED investigation. This is not the account quota and switching accounts will not help - give it fewer/smaller files to read, or split the task.')
+  }
+
+  Write-AgyDiagnostic "completed attempt $attempt in $($result.ElapsedSeconds)s; stdout-chars=$($trimmedOutput.Length)$(if ($budgetHit) { '; TOKEN-BUDGET-EXHAUSTED' })"
   Write-Output $result.Stdout
   exit 0
 }

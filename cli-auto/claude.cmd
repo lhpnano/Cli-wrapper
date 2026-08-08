@@ -15,7 +15,7 @@ if /i "%AGYMODE%"=="DIRECT" (
   set "ALL_PROXY="
 )
 set "NO_PROXY=127.0.0.1,localhost"
-claude %*
+call "%APPDATA%\npm\claude.cmd" %*
 exit /b %errorlevel%
 :route_err
 echo [claude] %AGYMODE% 1>&2
